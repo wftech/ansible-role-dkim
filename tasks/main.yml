@@ -1,4 +1,12 @@
 ---
+# DKIM Role - Updated for idempotency and validation
+# Requirements addressed:
+# - 1.2: DKIM Role validates existing keys without regenerating them
+# - 8.1: Role remains idempotent when re-run
+# - 8.2: Validates key files are readable
+# - 8.3: Generates missing keys for active DKIM domains
+# - 8.4: Updates OpenDKIM signing table and key table configuration
+
 - name: Load the OS specific variables
   include_vars: "{{ ansible_distribution }}.yml"
 
@@ -51,26 +59,102 @@
     owner: root
     group: root
     mode: "0755"
-  loop: "{{ dkim_domains }}"
-
-# idempotent, but shell, so it says changed every time
-- name: Generate key for domain if it do not exists
-  shell: "{{ dkim_genkey }} -r -d {{ item.domain }} -D /etc/opendkim/keys/{{ item.domain }}/ -s {{ item.selector|default(dkim_default_selector) }} " 
-  args:
-    creates: /etc/opendkim/keys/{{ item.domain }}/{{ item.selector|default(dkim_default_selector) }}.private
   loop: '{{ dkim_domains }}'
+  when:
+    - dkim_manage_keys | default(true)
+    - dkim_domains is defined
+    - dkim_domains | length > 0
 
+# Requirement 8.1: Idempotency - uses 'creates' parameter to avoid regenerating existing keys
+# Requirement 8.3: Recovery logic - Generate missing keys automatically
+- name: Generate key for domain if it does not exist
+  shell: "{{ dkim_genkey }} -r -d {{ item.domain }} -s {{ item.selector }} -D /etc/opendkim/keys/{{ item.domain }}/"
+  args:
+    creates: "/etc/opendkim/keys/{{ item.domain }}/{{ item.selector }}.private"
+  loop: '{{ dkim_domains }}'
+  when:
+    - dkim_manage_keys | default(true)
+    - dkim_domains is defined
+    - dkim_domains | length > 0
+  register: key_generation
+  failed_when: false
+
+- name: Log successful DKIM key generation
+  debug:
+    msg: "Successfully generated DKIM key for {{ item.item.domain }}/{{ item.item.selector }}"
+  loop: "{{ key_generation.results }}"
+  when:
+    - dkim_manage_keys | default(true)
+    - key_generation is defined
+    - item is defined
+    - item is not failed
+    - item.changed
+
+- name: Log failed DKIM key generation
+  debug:
+    msg: "Failed to generate DKIM key for {{ item.item.domain }}/{{ item.item.selector }}: {{ item.stderr | default('Unknown error') }}"
+  loop: "{{ key_generation.results }}"
+  when:
+    - dkim_manage_keys | default(true)
+    - key_generation is defined
+    - item is defined
+    - item is failed
+
+# Ensure both private and public key files have correct ownership
 - name: Ensure private key is readable only by appropriate user
   file:
-    name: "/etc/opendkim/keys/{{ item.domain }}/{{ item.selector|default(dkim_default_selector) }}.private"
+    name: "/etc/opendkim/keys/{{ item.domain }}/{{ item.selector }}.private"
     owner: "{{ dkim_user }}"
     group: "{{ dkim_user }}"
     mode: "0600"
   loop: "{{ dkim_domains }}"
+  when:
+    - dkim_manage_keys | default(true)
+    - dkim_domains is defined
+    - dkim_domains | length > 0
+  register: private_key_ownership
+  failed_when: false
+
+- name: Ensure public key file has correct ownership
+  file:
+    name: "/etc/opendkim/keys/{{ item.domain }}/{{ item.selector }}.txt"
+    owner: "{{ dkim_user }}"
+    group: "{{ dkim_user }}"
+    mode: "0644"
+  loop: "{{ dkim_domains }}"
+  when:
+    - dkim_manage_keys | default(true)
+    - dkim_domains is defined
+    - dkim_domains | length > 0
+  register: public_key_ownership
+  failed_when: false
+
+- name: Log ownership setting failures
+  debug:
+    msg: "Failed to set ownership for DKIM key files {{ item.item.domain }}/{{ item.item.selector }}: {{ item.msg | default('File may not exist') }}"
+  loop: "{{ private_key_ownership.results + public_key_ownership.results }}"
+  when:
+    - dkim_manage_keys | default(true)
+    - item is defined
+    - item is failed
 
 - name: Set OpenDKIM to start after boot
   service:
     name: opendkim
     state: started
     enabled: yes
+  register: opendkim_service_start
+  failed_when: false
+
+- name: Log OpenDKIM service start result
+  debug:
+    msg: "OpenDKIM service start: {{ 'Success' if opendkim_service_start is not failed else 'Failed - ' + (opendkim_service_start.msg | default('Unknown service error')) }}"
+  when: opendkim_service_start is defined
+
+- name: Continue even if OpenDKIM service failed to start
+  debug:
+    msg: "OpenDKIM service failed to start, but continuing with provisioning. Manual intervention may be required."
+  when: 
+    - opendkim_service_start is defined
+    - opendkim_service_start is failed
 

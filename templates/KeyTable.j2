@@ -1,3 +1,3 @@
 {% for item in dkim_domains %}
-{{ item.selector|default(dkim_default_selector) }}._domainkey.{{ item.domain }} {{ item.domain }}:{{ item.selector|default(dkim_default_selector) }}:/etc/opendkim/keys/{{ item.domain }}/{{ item.selector|default(dkim_default_selector)}}.private
+{{ item.selector }}._domainkey.{{ item.domain }} {{ item.domain }}:{{ item.selector }}:/etc/opendkim/keys/{{ item.domain }}/{{ item.selector }}.private
 {% endfor %}

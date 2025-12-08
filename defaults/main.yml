@@ -3,10 +3,15 @@
 
 dkim_port: "{{ dkim_default_port }}"
 
-# default selector to be used, when no selector defined
-dkim_default_selector: 'default'
+# Set to false to disable automatic key generation (useful when keys are managed by another role)
+dkim_manage_keys: true
 
+# dkim_domains should be a list of dictionaries with 'domain' and 'selector' keys
+# Example:
+# dkim_domains:
+#   - domain: example.com
+#     selector: default
+#   - domain: another.com
+#     selector: mail
 dkim_domains: []
-# - { 'domain': 'domain.com' } # no selector defined, dkim_default_selector will be used
-# - { 'domain': 'anotherdomain.org', 'selector': '202208' }
-
+ 
